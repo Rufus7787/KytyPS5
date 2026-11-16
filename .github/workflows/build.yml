@@ -7,6 +7,12 @@ on:
   push:
     tags: [ 'v*' ]
   workflow_dispatch:
+    inputs:
+      march:
+        description: 'CPU target (x86-64-v3: any AVX2 PC; znver5: tuned for Ryzen 9000, crashes on other CPUs)'
+        type: choice
+        options: [x86-64-v3, znver5]
+        default: x86-64-v3
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,6 +37,9 @@ jobs:
         run: |
           $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "KytyPS5-$env:GITHUB_REF_NAME" } else {
             "KytyPS5-$((Get-Date).ToUniversalTime().ToString('yyyyMMdd'))-$($env:GITHUB_SHA.Substring(0, 8))" }
+          # A build for one CPU family says so in its name (it crashes on other CPUs).
+          $march = '${{ inputs.march }}'
+          if ($march -and $march -ne 'x86-64-v3') { $name = "$name-$march" }
           "package=$name" >> $env:GITHUB_OUTPUT
 
       # The tested compiler (LLVM 23.1.2 crashed compiling agc.cpp; others are untested).
@@ -93,10 +102,21 @@ jobs:
       - name: Build
         shell: cmd
         env:
-          KYTY_CMAKE_ARGS: -DKYTY_MARCH=x86-64-v3
+          KYTY_CMAKE_ARGS: -DKYTY_MARCH=${{ inputs.march || 'x86-64-v3' }}
         run: |
           call build-windows.cmd kyty_emulator || exit /b 1
           call build-windows.cmd kyty_shader_precompile || exit /b 1
+
+      # The linker map and PDB of this exact exe (fixed base 0x140000000): render-thread profiles taken with the
+      # live `prof` command are named with them (tools/local/prof-map.py). Not part of the release package.
+      - name: Upload symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.package }}-symbols
+          path: |
+            _Build/windows/kyty_emulator*.map
+            _Build/windows/kyty_emulator.pdb
+          if-no-files-found: error
 
       # The settings window (launcher-windows: WPF on .NET Framework 4.7.2, part of Windows 10 and 11).
       - name: Build launcher

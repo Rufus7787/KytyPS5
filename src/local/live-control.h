@@ -15,6 +15,7 @@
 // (process mode: pc, thread id | 1 << 63, zeros).
 //   timecensus <seconds>          time-related HLE calls per guest caller (time-census.h)
 //   glide <x> <y> <z> <speed>     Demon's Souls 01.007.000: the player walks there (warp requests, no input)
+//   where [label]                 Demon's Souls 01.007.000: the player's position and yaw (for glide)
 //   pad <lx> <ly> <rx> <ry> <buttons> <seconds>   scripted pad input (sticks 0..255, -1 the host's; buttons hex)
 //   where / place <x> <y> <z> <yaw>   the player's position and yaw / the player put there (tools/local/SPIKE-WALK.md)
 //   flipsx <count> <path>         as flips, with the buffer registrations of each frame
@@ -681,6 +682,13 @@ inline void Run(uint64_t id, const std::string& line) {
 		const bool parsed  = std::sscanf(line.c_str(), "%*s %f %f %f %f", &x, &y, &z, &speed) == 4;
 		const auto seconds = parsed ? Loader::DemonsSoulsWarp::Glide(x, y, z, speed) : -1.0;
 		std::printf("LIVE_GLIDE id=%" PRIu64 " seconds=%.2f\n", id, seconds);
+	} else if (cmd == "where") {
+		// where [label]: the player's position and yaw now (Demon's Souls 01.007.000; ok=0: no player), the place a later
+		// `glide X Y Z SPEED` returns to (a fixed benchmark spot).
+		float      xyz[3] {}, yaw = 0;
+		const bool ok = Loader::DemonsSoulsWarp::PlayerPlace(xyz, &yaw);
+		std::printf("LIVE_WHERE id=%" PRIu64 " label=%s ok=%d x=%.3f y=%.3f z=%.3f yaw=%.4f\n", id, n >= 2 ? arg1 : "-",
+		            ok ? 1 : 0, xyz[0], xyz[1], xyz[2], yaw);
 	} else if (cmd == "pad") {
 		// pad LX LY RX RY BUTTONS SECONDS: what the game reads from the pad for SECONDS (libs/controller.h).
 		int          axes[4] {-1, -1, -1, -1};

@@ -1409,6 +1409,46 @@ struct WriteStamps {
 	}
 };
 
+// A FIFO in fixed chunks of N entries (N a power of two): push_back and pop_front never move an entry (a pointer to one
+// stays valid until it is popped, as with std::deque) and allocate once per N entries, a drained chunk kept for the
+// next. (MSVC's std::deque holds one entry of more than 8 bytes per block: an allocation per push_back and a free per
+// pop_front. EffectsLog's push_back was 3% of the render thread's time in mode 4 at a busy view, 17 Nov.)
+template <typename T, size_t N = 1024>
+class ChunkedFifo {
+	static_assert(N != 0 && (N & (N - 1)) == 0, "N: a power of two");
+
+public:
+	void push_back(const T& value) {
+		const size_t at = m_head + m_size;
+		if (at / N == m_chunks.size()) m_chunks.push_back(m_spare != nullptr ? std::move(m_spare) : std::make_unique<T[]>(N));
+		m_chunks[at / N][at % N] = value;
+		++m_size;
+	}
+	void pop_front() {
+		--m_size;
+		if (++m_head == N) {
+			m_spare = std::move(m_chunks.front());
+			m_chunks.erase(m_chunks.begin());
+			m_head = 0;
+		}
+	}
+	[[nodiscard]] size_t   size() const noexcept { return m_size; }
+	[[nodiscard]] bool     empty() const noexcept { return m_size == 0; }
+	[[nodiscard]] const T& operator[](size_t i) const {
+		const size_t at = m_head + i;
+		return m_chunks[at / N][at % N];
+	}
+	[[nodiscard]] T& operator[](size_t i) {
+		const size_t at = m_head + i;
+		return m_chunks[at / N][at % N];
+	}
+
+private:
+	std::vector<std::unique_ptr<T[]>> m_chunks;
+	std::unique_ptr<T[]>              m_spare;
+	size_t                            m_head = 0, m_size = 0;
+};
+
 // What the translation of the thread that commits does (the normal translation, holes) that a speculation translated
 // before it must see, in order (each speculation is checked against what was logged since it began): the ranges its
 // GPU work writes, the guest memory it writes on the CPU (the processor's writes, copies, fills), the descriptor sets
@@ -1420,7 +1460,7 @@ struct EffectsLog {
 		EffectSource source = EffectSource::Normal;
 		uint64_t     address = 0, size = 0; // a set: its handle
 	};
-	std::deque<Entry>     entries;
+	ChunkedFifo<Entry>    entries;
 	uint64_t              base = 0;  // the index of entries.front() since the log began
 	std::atomic<uint64_t> end {0};   // entries since the log began (read where a speculation begins)
 	[[nodiscard]] uint64_t End() const noexcept { return end.load(std::memory_order_acquire); }

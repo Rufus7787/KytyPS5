@@ -780,7 +780,7 @@ std::unique_ptr<Speculation::Result> Speculation::Translate(Translator& translat
 			r.state.previous = nullptr;
 		// (Where its effects begin, as it becomes the translation going on: the log keeps what it may need.)
 		r.effects_from     = m_log.End();
-		r.state.log_end    = &m_log.end;
+		r.state.log_end    = &m_log.WorkerEnd();
 		translator.current = &r;
 	}
 	r.state.Inherit();

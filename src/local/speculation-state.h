@@ -1464,6 +1464,20 @@ struct EffectsLog {
 	uint64_t              base = 0;  // the index of entries.front() since the log began
 	std::atomic<uint64_t> end {0};   // entries since the log began (read where a speculation begins)
 	[[nodiscard]] uint64_t End() const noexcept { return end.load(std::memory_order_acquire); }
+	// spec_log_end_line (live; default 0 while it is measured): the speculations' threads read `end_own`, the same count
+	// on a cache line of its own, instead of `end`, which shares a line with the entries' size and `base` that the thread
+	// that commits writes at every Add: whether that line going back and forth between the cores is what Add's store of
+	// the entry waits on (one store was 90% of ChunkedFifo::push_back's samples, mode 4 at a busy view, 17 Nov).
+	alignas(64) std::atomic<uint64_t> end_own {0};
+	char                              end_own_line[64 - sizeof(std::atomic<uint64_t>)] {};
+	[[nodiscard]] static std::atomic<int64_t>& EndLineSwitch() {
+		static auto& on = LiveSwitch::Find("spec_log_end_line", 0);
+		return on;
+	}
+	// The count a speculation's thread reads (Spec::State::log_end), taken where the speculation begins.
+	[[nodiscard]] const std::atomic<uint64_t>& WorkerEnd() const noexcept {
+		return EndLineSwitch().load(std::memory_order_relaxed) != 0 ? end_own : end;
+	}
 	WriteStamps<8>         stamps;      // GPU and host writes
 	WriteStamps<12>        host_stamps; // host writes
 	// spec_log_index (under KYTY_SPECULATE=4 only, the mode read at each Add): per 4 MiB
@@ -1496,6 +1510,7 @@ struct EffectsLog {
 		                  if (kind == Kind::HostWrite) host_stamps.Stamp(address, size, base + entries.size() + 1);
 		                  entries.push_back({kind, t_effect_source, address, size});
 		                  end.store(base + entries.size(), std::memory_order_release);
+		                  end_own.store(base + entries.size(), std::memory_order_release);
 	}
 	// The first write logged from `from` on over the range (null: none).
 	[[nodiscard]] const Entry* FirstWriteOver(uint64_t from, uint64_t address, uint64_t size) const {
